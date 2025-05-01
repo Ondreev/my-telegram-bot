@@ -147,4 +147,7 @@ scheduler.start()
 
 if __name__ == '__main__':
     print("=== ЗАПУСК БОТА ===")
+    if __name__ == '__main__':
+    print("=== ЗАПУСК БОТА ===")
+    morning_greeting()  # Тест утреннего сообщения
     bot.polling()
