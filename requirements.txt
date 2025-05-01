@@ -1,0 +1,5 @@
+telebot
+feedparser
+requests
+beautifulsoup4
+apscheduler
