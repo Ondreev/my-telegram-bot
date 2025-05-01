@@ -4,11 +4,8 @@ import feedparser
 import requests
 from bs4 import BeautifulSoup
 from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.cron import CronTrigger
 from datetime import datetime
-import pytz
 import random
-
 
 # Получаем данные из переменных окружения
 TOKEN = os.getenv('TOKEN')
@@ -33,8 +30,7 @@ def is_spam(text):
         'работа', 'работник', 'работников', 'работники', 'деньг', 'работ', 'пиши',
         'работа в интернете', 'бесплатно', 'реклама', 'ссылка', 'vk.com',
         't.me', 'дешево', 'нажми сюда', 'подпишись', 'криптовалюта',
-        'биткоин', 'только сегодня', 'взлом', 'пароль', 'онлайн-казино',
-        'подраб', 'работ', 'vpn', 'профил', 'личк', 'впн'
+        'биткоин', 'только сегодня', 'взлом', 'пароль', 'онлайн-казино'
     ]
     text_lower = text.lower().replace(" ", "")
     for word in spam_words:
@@ -99,7 +95,7 @@ def format_news_post(article):
            f"\n\nИсточник: {article['source']['name']}"
 
 def can_publish_news():
-    now = datetime.now(pytz.timezone('Europe/Moscow'))
+    now = datetime.now()
     current_hour = now.hour
     return not (22 <= current_hour < 8)
 
@@ -140,10 +136,10 @@ def morning_greeting():
         parse_mode='HTML'
     )
 
-# Настройка расписания с учётом московского времени
-scheduler = BackgroundScheduler(timezone='Europe/Moscow')
+# Настройка расписания
+scheduler = BackgroundScheduler()
 scheduler.add_job(send_news_to_channel, 'interval', hours=3)
-scheduler.add_job(morning_greeting, CronTrigger(hour=8, minute=0, timezone='Europe/Moscow'))
+scheduler.add_job(morning_greeting, 'cron', hour=8, minute=0)
 scheduler.start()
 
 if __name__ == '__main__':
