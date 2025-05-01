@@ -1,5 +1,6 @@
-telebot
+pyTelegramBotAPI
 feedparser
 requests
 beautifulsoup4
 apscheduler
+pytz
