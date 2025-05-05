@@ -1,73 +1,50 @@
+import os
 import telebot
 import json
-import os
 
-TOKEN = '7784249517:AAGdOGzTyeXHXZj9sE9nuKAzUdCx8u8HPHw'
-CHANNEL = '@ondreeff'  # замените на ваш канал, если нужно
+TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
+CHANNEL_ID = os.environ.get('CHANNEL_ID')  # ID или @username канала/чата
 
 bot = telebot.TeleBot(TOKEN)
+DATA_FILE = 'messages.json'
+STATE_FILE = 'publish_state.json'  # для хранения индекса последней опубликованной новости
 
-FILE = 'messages.json'
-STATE_FILE = 'publish_state.json'  # для хранения индексов опубликованных сообщений
-
-def load_messages():
+def load_data():
     try:
-        with open(FILE, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-            return data.get('morning', []), data.get('news', [])
-    except FileNotFoundError:
-        return [], []
+        with open(DATA_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except:
+        return {'morning': [], 'news': []}
 
 def load_state():
-    if os.path.exists(STATE_FILE):
+    try:
         with open(STATE_FILE, 'r', encoding='utf-8') as f:
             return json.load(f)
-    else:
-        return {'morning_index': 0, 'news_index': 0}
+    except:
+        return {'last_news_index': -1}
 
 def save_state(state):
     with open(STATE_FILE, 'w', encoding='utf-8') as f:
-        json.dump(state, f, ensure_ascii=False, indent=2)
+        json.dump(state, f)
 
-def publish_message(item):
+def publish_next_news():
+    data = load_data()
+    state = load_state()
+    news_list = data.get('news', [])
+    if not news_list:
+        print("Нет новостей для публикации")
+        return
+
+    next_index = (state['last_news_index'] + 1) % len(news_list)
+    news = news_list[next_index]
+
     try:
-        if item['type'] == 'text':
-            bot.send_message(CHANNEL, item['content'])
-        elif item['type'] == 'photo':
-            bot.send_photo(CHANNEL, item['file_id'], caption=item.get('caption', ''))
-        elif item['type'] == 'video':
-            bot.send_video(CHANNEL, item['file_id'], caption=item.get('caption', ''))
-        else:
-            print(f"Неизвестный тип сообщения: {item['type']}")
-            return False
-        return True
+        bot.send_message(CHANNEL_ID, news['text'])
+        print(f"Опубликована новость #{next_index + 1}")
+        state['last_news_index'] = next_index
+        save_state(state)
     except Exception as e:
         print(f"Ошибка при публикации: {e}")
-        return False
-
-def main():
-    morning_messages, news_messages = load_messages()
-    state = load_state()
-
-    # Публикуем утреннее сообщение, если есть и не публиковали
-    if state['morning_index'] < len(morning_messages):
-        item = morning_messages[state['morning_index']]
-        if publish_message(item):
-            state['morning_index'] += 1
-            save_state(state)
-            print("Утреннее сообщение опубликовано")
-            return
-
-    # Публикуем новость, если есть и не публиковали
-    if state['news_index'] < len(news_messages):
-        item = news_messages[state['news_index']]
-        if publish_message(item):
-            state['news_index'] += 1
-            save_state(state)
-            print("Новость опубликована")
-            return
-
-    print("Нет новых сообщений для публикации")
 
 if __name__ == '__main__':
-    main()
+    publish_next_news()
