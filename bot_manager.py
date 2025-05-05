@@ -31,32 +31,49 @@ def save_data(data):
 def is_admin(user_id):
     return user_id == ADMIN_ID
 
-# Команда /start с кнопками
+# Команда /start с русскими кнопками
 @bot.message_handler(commands=['start'])
 def start(message):
     if not is_admin(message.from_user.id):
         bot.reply_to(message, "❌ У вас нет прав доступа")
         return
 
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    btn1 = types.KeyboardButton('/add_morning')
-    btn2 = types.KeyboardButton('/add_news')
-    btn3 = types.KeyboardButton('/list_morning')
-    btn4 = types.KeyboardButton('/list_news')
-    btn5 = types.KeyboardButton('/delete_morning')
-    btn6 = types.KeyboardButton('/delete_news')
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=3)
+    btn1 = types.KeyboardButton('➕ Добавить утреннее сообщение')
+    btn2 = types.KeyboardButton('➕ Добавить новость')
+    btn3 = types.KeyboardButton('📋 Список утренних сообщений')
+    btn4 = types.KeyboardButton('📋 Список новостей')
+    btn5 = types.KeyboardButton('❌ Удалить утреннее сообщение')
+    btn6 = types.KeyboardButton('❌ Удалить новость')
     markup.add(btn1, btn2, btn3, btn4, btn5, btn6)
 
-    bot.send_message(message.chat.id, "Выберите команду:", reply_markup=markup)
+    bot.send_message(message.chat.id, "Выберите действие:", reply_markup=markup)
 
-# Добавление утреннего сообщения
-@bot.message_handler(commands=['add_morning'])
-def add_morning(message):
+# Обработчик текста кнопок
+@bot.message_handler(func=lambda message: True)
+def handle_text(message):
     if not is_admin(message.from_user.id):
+        bot.reply_to(message, "❌ У вас нет прав доступа")
         return
 
-    msg = bot.reply_to(message, "Отправьте текст утреннего сообщения:")
-    bot.register_next_step_handler(msg, process_morning_step)
+    text = message.text
+
+    if text == '➕ Добавить утреннее сообщение':
+        msg = bot.reply_to(message, "Отправьте текст утреннего сообщения:")
+        bot.register_next_step_handler(msg, process_morning_step)
+    elif text == '➕ Добавить новость':
+        msg = bot.reply_to(message, "Отправьте текст новости:")
+        bot.register_next_step_handler(msg, process_news_step)
+    elif text == '📋 Список утренних сообщений':
+        list_morning(message)
+    elif text == '📋 Список новостей':
+        list_news(message)
+    elif text == '❌ Удалить утреннее сообщение':
+        bot.reply_to(message, "Введите команду /delete_morning <номер>")
+    elif text == '❌ Удалить новость':
+        bot.reply_to(message, "Введите команду /delete_news <номер>")
+    else:
+        bot.reply_to(message, "Неизвестная команда. Используйте кнопки меню.")
 
 def process_morning_step(message):
     try:
@@ -70,15 +87,6 @@ def process_morning_step(message):
     except Exception as e:
         bot.reply_to(message, f"❌ Ошибка: {str(e)}")
 
-# Добавление новости
-@bot.message_handler(commands=['add_news'])
-def add_news(message):
-    if not is_admin(message.from_user.id):
-        return
-
-    msg = bot.reply_to(message, "Отправьте текст новости:")
-    bot.register_next_step_handler(msg, process_news_step)
-
 def process_news_step(message):
     try:
         data = load_data()
@@ -91,12 +99,7 @@ def process_news_step(message):
     except Exception as e:
         bot.reply_to(message, f"❌ Ошибка: {str(e)}")
 
-# Просмотр утренних сообщений
-@bot.message_handler(commands=['list_morning'])
 def list_morning(message):
-    if not is_admin(message.from_user.id):
-        return
-
     data = load_data()
     if not data['morning']:
         bot.reply_to(message, "Нет сохраненных утренних сообщений")
@@ -107,12 +110,7 @@ def list_morning(message):
         msg += f"{idx}. {item['text']} (Добавлено: {item['timestamp']})\n"
     bot.reply_to(message, msg)
 
-# Просмотр новостей
-@bot.message_handler(commands=['list_news'])
 def list_news(message):
-    if not is_admin(message.from_user.id):
-        return
-
     data = load_data()
     if not data['news']:
         bot.reply_to(message, "Нет сохраненных новостей")
