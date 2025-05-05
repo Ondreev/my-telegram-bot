@@ -1,4 +1,2 @@
 pyTelegramBotAPI
 Flask
-И установите зависимости командой:
-pip install -r requirements.txt
