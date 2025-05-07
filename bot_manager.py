@@ -8,7 +8,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_FILE = os.path.join(BASE_DIR, 'messages.json')
 
 # Ваш токен и ID администратора
-TOKEN = '7784249517:AAGdOGzTyeXHXZj9sE9nuKAzUdCx8u8HPHw'  # <-- ваш токен
+TOKEN = '7784249517:AAFZdcmFknfTmAf17N2wTifmCoF54BQkeZU'  # <-- ваш токен
 ADMIN_ID = 530258581  # <-- ваш Telegram user ID
 
 bot = telebot.TeleBot(TOKEN)
