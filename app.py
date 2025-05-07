@@ -14,11 +14,10 @@ STATE_FILE = os.path.join(BASE_DIR, 'publish_state.json')
 
 TOKEN = '7784249517:AAGdOGzTyeXHXZj9sE9nuKAzUdCx8u8HPHw'
 ADMIN_ID = 530258581
-CHANNEL_ID = '@ondreeff'  # Замените на ваш канал, например '@mychannel'
+CHANNEL_ID = '@ondreeff'  # Замените на ваш канал
 
 bot = telebot.TeleBot(TOKEN)
 
-# --- Функции для работы с данными ---
 def load_data():
     try:
         with open(DATA_FILE, 'r', encoding='utf-8') as f:
@@ -47,7 +46,6 @@ def save_state(state):
 def is_admin(user_id):
     return user_id == ADMIN_ID
 
-# --- Обработчики команд бота ---
 @bot.message_handler(commands=['start'])
 def start(message):
     if not is_admin(message.from_user.id):
@@ -68,8 +66,8 @@ def handle_text(message):
         return
     text = message.text
     if text == '➕ Добавить новость':
-        msg = bot.reply_to(message, "Отправьте текст новости:")
-        bot.register_next_step_handler(msg, add_news)
+        msg = bot.reply_to(message, "Отправьте фото или видео с описанием новости:")
+        bot.register_next_step_handler(msg, add_media_news)
     elif text == '📋 Список новостей':
         list_news(message)
     elif text == '❌ Удалить новость':
@@ -77,11 +75,33 @@ def handle_text(message):
     else:
         bot.reply_to(message, "Неизвестная команда. Используйте кнопки меню.")
 
-def add_news(message):
+def add_media_news(message):
+    if message.content_type == 'photo':
+        file_id = message.photo[-1].file_id  # Берём фото с максимальным разрешением
+        caption = message.caption or ''
+        news_item = {
+            'type': 'photo',
+            'file_id': file_id,
+            'caption': caption,
+            'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+    elif message.content_type == 'video':
+        file_id = message.video.file_id
+        caption = message.caption or ''
+        news_item = {
+            'type': 'video',
+            'file_id': file_id,
+            'caption': caption,
+            'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+    else:
+        bot.reply_to(message, "Ошибка: нужно отправить фото или видео с описанием.")
+        return
+
     data = load_data()
-    data['news'].append({'text': message.text, 'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
+    data['news'].append(news_item)
     save_data(data)
-    bot.reply_to(message, "✅ Новость добавлена")
+    bot.reply_to(message, "✅ Новость с медиа добавлена")
 
 def list_news(message):
     data = load_data()
@@ -90,7 +110,15 @@ def list_news(message):
         return
     msg = "Новости:\n"
     for i, item in enumerate(data['news'], 1):
-        msg += f"{i}. {item['text']} (добавлено {item['timestamp']})\n"
+        t = item.get('type', 'text')
+        if t == 'photo':
+            desc = item.get('caption', '')
+            msg += f"{i}. Фото: {desc} (добавлено {item['timestamp']})\n"
+        elif t == 'video':
+            desc = item.get('caption', '')
+            msg += f"{i}. Видео: {desc} (добавлено {item['timestamp']})\n"
+        else:
+            msg += f"{i}. {item.get('text', '')} (добавлено {item['timestamp']})\n"
     bot.reply_to(message, msg)
 
 @bot.message_handler(commands=['delete_news'])
@@ -106,11 +134,10 @@ def delete_news(message):
     if 0 <= idx < len(data['news']):
         removed = data['news'].pop(idx)
         save_data(data)
-        bot.reply_to(message, f"Удалена новость: {removed['text']}")
+        bot.reply_to(message, f"Удалена новость #{idx+1}")
     else:
         bot.reply_to(message, "Неверный номер")
 
-# --- Вебхук обработчик ---
 @app.route('/webhook', methods=['POST'])
 def webhook():
     if request.headers.get('content-type') == 'application/json':
@@ -121,7 +148,6 @@ def webhook():
     else:
         return 'Invalid content type', 403
 
-# --- Публикация новостей ---
 @app.route('/publish_news')
 def publish_news():
     data = load_data()
@@ -134,7 +160,12 @@ def publish_news():
     news = news_list[next_index]
 
     try:
-        bot.send_message(CHANNEL_ID, news['text'])
+        if news['type'] == 'photo':
+            bot.send_photo(CHANNEL_ID, news['file_id'], caption=news.get('caption', ''))
+        elif news['type'] == 'video':
+            bot.send_video(CHANNEL_ID, news['file_id'], caption=news.get('caption', ''))
+        else:
+            bot.send_message(CHANNEL_ID, news.get('text', ''))
         state['last_news_index'] = next_index
         save_state(state)
         return f"Опубликована новость #{next_index + 1}"
