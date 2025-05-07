@@ -9,8 +9,9 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_FILE = os.path.join(BASE_DIR, 'messages.json')
 STATE_FILE = os.path.join(BASE_DIR, 'publish_state.json')
 
-TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
-CHANNEL_ID = os.environ.get('CHANNEL_ID')
+# Ваш токен и ID канала
+TOKEN = '7784249517:AAGdOGzTyeXHXZj9sE9nuKAzUdCx8u8HPHw'  # <-- ваш токен
+CHANNEL_ID = '@your_channel_username'  # <-- замените на ваш канал или ID
 
 bot = telebot.TeleBot(TOKEN)
 
