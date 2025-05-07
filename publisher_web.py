@@ -11,7 +11,7 @@ STATE_FILE = os.path.join(BASE_DIR, 'publish_state.json')
 
 # Ваш токен и ID канала
 TOKEN = '7784249517:AAGdOGzTyeXHXZj9sE9nuKAzUdCx8u8HPHw'  # <-- ваш токен
-CHANNEL_ID = '@your_channel_username'  # <-- замените на ваш канал или ID
+CHANNEL_ID = '@ondreeff'  # <-- замените на ваш канал или ID
 
 bot = telebot.TeleBot(TOKEN)
 
