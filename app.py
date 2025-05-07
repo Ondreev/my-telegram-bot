@@ -1,6 +1,6 @@
 import os
 import telebot
-import json
+import sqlite3
 from datetime import datetime
 from flask import Flask, request
 from telebot import types
@@ -8,47 +8,86 @@ from waitress import serve
 
 app = Flask(__name__)
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_FILE = os.path.join(BASE_DIR, 'messages.json')
-STATE_FILE = os.path.join(BASE_DIR, 'publish_state.json')
-
+# Настройки базы данных (файл news.db в текущей директории)
+DATABASE = "news.db"
 TOKEN = '7784249517:AAFZdcmFknfTmAf17N2wTifmCoF54BQkeZU'
 ADMIN_ID = 530258581
 CHANNEL_ID = '@ondreeff'  # Замените на ваш канал
 
 bot = telebot.TeleBot(TOKEN)
 
-def load_data():
-    try:
-        with open(DATA_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except:
-        return {'news': []}
+# --- Инициализация базы данных ---
+def init_db():
+    conn = sqlite3.connect(DATABASE)
+    cursor = conn.cursor()
+    # Таблица для новостей
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS news (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            type TEXT NOT NULL,  -- 'text', 'photo', 'video'
+            content TEXT,        -- Текст или file_id для медиа
+            caption TEXT,        -- Описание для медиа
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    # Таблица для отслеживания состояния публикации
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS publish_state (
+            last_news_id INTEGER DEFAULT 0
+        )
+    ''')
+    # Убедимся, что таблица publish_state имеет начальное значение
+    cursor.execute('INSERT OR IGNORE INTO publish_state (last_news_id) VALUES (0)')
+    conn.commit()
+    conn.close()
 
-def save_data(data):
-    try:
-        with open(DATA_FILE, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        print(f"Ошибка при сохранении данных: {e}")
+init_db()  # Создаём таблицы при старте
 
-def load_state():
-    try:
-        with open(STATE_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except:
-        return {'last_news_index': -1}
+# --- Функции для работы с базой ---
+def add_news(news_type, content, caption=None):
+    conn = sqlite3.connect(DATABASE)
+    cursor = conn.cursor()
+    cursor.execute(
+        'INSERT INTO news (type, content, caption) VALUES (?, ?, ?)',
+        (news_type, content, caption)
+    )
+    conn.commit()
+    conn.close()
 
-def save_state(state):
-    with open(STATE_FILE, 'w', encoding='utf-8') as f:
-        json.dump(state, f)
+def get_all_news():
+    conn = sqlite3.connect(DATABASE)
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM news ORDER BY timestamp DESC')
+    news = cursor.fetchall()
+    conn.close()
+    return news
 
-def is_admin(user_id):
-    return user_id == ADMIN_ID
+def delete_news(news_id):
+    conn = sqlite3.connect(DATABASE)
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM news WHERE id = ?', (news_id,))
+    conn.commit()
+    conn.close()
 
+def get_publish_state():
+    conn = sqlite3.connect(DATABASE)
+    cursor = conn.cursor()
+    cursor.execute('SELECT last_news_id FROM publish_state LIMIT 1')
+    state = cursor.fetchone()[0]
+    conn.close()
+    return state
+
+def update_publish_state(news_id):
+    conn = sqlite3.connect(DATABASE)
+    cursor = conn.cursor()
+    cursor.execute('UPDATE publish_state SET last_news_id = ?', (news_id,))
+    conn.commit()
+    conn.close()
+
+# --- Обработчики команд бота ---
 @bot.message_handler(commands=['start'])
 def start(message):
-    if not is_admin(message.from_user.id):
+    if message.from_user.id != ADMIN_ID:
         bot.reply_to(message, "❌ У вас нет прав доступа")
         return
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
@@ -61,116 +100,115 @@ def start(message):
 
 @bot.message_handler(func=lambda m: True)
 def handle_text(message):
-    if not is_admin(message.from_user.id):
+    if message.from_user.id != ADMIN_ID:
         bot.reply_to(message, "❌ У вас нет прав доступа")
         return
     text = message.text
     if text == '➕ Добавить новость':
-        msg = bot.reply_to(message, "Отправьте фото или видео с описанием новости:")
-        bot.register_next_step_handler(msg, add_media_news)
+        msg = bot.reply_to(
+            message,
+            "Отправьте текст, фото или видео с описанием:\n"
+            "⚠️ Для фото/видео описание пишите в поле 'Описание'"
+        )
+        bot.register_next_step_handler(msg, process_news_input)
     elif text == '📋 Список новостей':
-        list_news(message)
+        show_news_list(message)
     elif text == '❌ Удалить новость':
         bot.reply_to(message, "Введите команду /delete_news <номер>")
     else:
         bot.reply_to(message, "Неизвестная команда. Используйте кнопки меню.")
 
-def add_media_news(message):
-    if message.content_type == 'photo':
-        file_id = message.photo[-1].file_id  # Берём фото с максимальным разрешением
+def process_news_input(message):
+    if message.content_type == 'text':
+        add_news('text', message.text)
+        bot.reply_to(message, "✅ Текстовая новость добавлена")
+    elif message.content_type == 'photo':
+        file_id = message.photo[-1].file_id
         caption = message.caption or ''
-        news_item = {
-            'type': 'photo',
-            'file_id': file_id,
-            'caption': caption,
-            'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        }
+        add_news('photo', file_id, caption)
+        bot.reply_to(message, "✅ Новость с фото добавлена")
     elif message.content_type == 'video':
         file_id = message.video.file_id
         caption = message.caption or ''
-        news_item = {
-            'type': 'video',
-            'file_id': file_id,
-            'caption': caption,
-            'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        }
+        add_news('video', file_id, caption)
+        bot.reply_to(message, "✅ Новость с видео добавлена")
     else:
-        bot.reply_to(message, "Ошибка: нужно отправить фото или видео с описанием.")
-        return
+        bot.reply_to(message, "❌ Неподдерживаемый формат. Отправьте текст, фото или видео.")
 
-    data = load_data()
-    data['news'].append(news_item)
-    save_data(data)
-    bot.reply_to(message, "✅ Новость с медиа добавлена")
-
-def list_news(message):
-    data = load_data()
-    if not data['news']:
+def show_news_list(message):
+    news = get_all_news()
+    if not news:
         bot.reply_to(message, "Нет новостей")
         return
-    msg = "Новости:\n"
-    for i, item in enumerate(data['news'], 1):
-        t = item.get('type', 'text')
-        if t == 'photo':
-            desc = item.get('caption', '')
-            msg += f"{i}. Фото: {desc} (добавлено {item['timestamp']})\n"
-        elif t == 'video':
-            desc = item.get('caption', '')
-            msg += f"{i}. Видео: {desc} (добавлено {item['timestamp']})\n"
+
+    response = "📰 Список новостей:\n"
+    for item in news:
+        news_id, news_type, content, caption, timestamp = item
+        if news_type == 'photo':
+            desc = caption if caption else "Без описания"
+            response += f"{news_id}. 📷 Фото: {desc} ({timestamp})\n"
+        elif news_type == 'video':
+            desc = caption if caption else "Без описания"
+            response += f"{news_id}. 🎥 Видео: {desc} ({timestamp})\n"
         else:
-            msg += f"{i}. {item.get('text', '')} (добавлено {item['timestamp']})\n"
-    bot.reply_to(message, msg)
+            response += f"{news_id}. 📝 {content} ({timestamp})\n"
+
+    bot.reply_to(message, response)
 
 @bot.message_handler(commands=['delete_news'])
-def delete_news(message):
-    if not is_admin(message.from_user.id):
+def handle_delete_news(message):
+    if message.from_user.id != ADMIN_ID:
         return
-    parts = message.text.split()
-    if len(parts) != 2 or not parts[1].isdigit():
-        bot.reply_to(message, "Используйте: /delete_news <номер>")
-        return
-    idx = int(parts[1]) - 1
-    data = load_data()
-    if 0 <= idx < len(data['news']):
-        removed = data['news'].pop(idx)
-        save_data(data)
-        bot.reply_to(message, f"Удалена новость #{idx+1}")
-    else:
-        bot.reply_to(message, "Неверный номер")
 
+    try:
+        news_id = int(message.text.split()[1])
+        delete_news(news_id)
+        bot.reply_to(message, f"✅ Новость #{news_id} удалена")
+    except (IndexError, ValueError):
+        bot.reply_to(message, "Используйте: /delete_news <номер>")
+
+# --- Вебхук и публикация ---
 @app.route('/webhook', methods=['POST'])
 def webhook():
     if request.headers.get('content-type') == 'application/json':
-        json_string = request.get_data().decode('utf-8')
-        update = telebot.types.Update.de_json(json_string)
+        update = telebot.types.Update.de_json(request.get_json())
         bot.process_new_updates([update])
-        return ''
-    else:
-        return 'Invalid content type', 403
+        return '', 200
+    return 'Invalid request', 400
 
 @app.route('/publish_news')
 def publish_news():
-    data = load_data()
-    state = load_state()
-    news_list = data.get('news', [])
-    if not news_list:
+    news = get_all_news()
+    if not news:
         return "Нет новостей для публикации"
 
-    next_index = (state['last_news_index'] + 1) % len(news_list)
-    news = news_list[next_index]
+    last_id = get_publish_state()
+    next_id = (last_id % len(news)) + 1  # Циклическая ротация
+
+    # Находим новость по следующему ID
+    target_news = None
+    for item in news:
+        if item[0] == next_id:
+            target_news = item
+            break
+
+    if not target_news:
+        return "Ошибка: новость не найдена"
+
+    news_type, content, caption = target_news[1], target_news[2], target_news[3]
 
     try:
-        if news['type'] == 'photo':
-            bot.send_photo(CHANNEL_ID, news['file_id'], caption=news.get('caption', ''))
-        elif news['type'] == 'video':
-            bot.send_video(CHANNEL_ID, news['file_id'], caption=news.get('caption', ''))
+        if news_type == 'photo':
+            bot.send_photo(CHANNEL_ID, content, caption=caption)
+        elif news_type == 'video':
+            bot.send_video(CHANNEL_ID, content, caption=caption)
         else:
-            bot.send_message(CHANNEL_ID, news.get('text', ''))
-        state['last_news_index'] = next_index
-        save_state(state)
-        return f"Опубликована новость #{next_index + 1}"
+            bot.send_message(CHANNEL_ID, content)
+
+        update_publish_state(next_id)
+        return f"✅ Опубликована новость #{next_id}"
     except Exception as e:
-        return f"Ошибка при публикации: {e}"
+        return f"Ошибка публикации: {str(e)}"
 
 @app.route('/')
 def home():
