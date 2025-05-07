@@ -4,6 +4,7 @@ import json
 from datetime import datetime
 from flask import Flask, request
 from telebot import types
+from waitress import serve
 
 app = Flask(__name__)
 
@@ -13,12 +14,9 @@ STATE_FILE = os.path.join(BASE_DIR, 'publish_state.json')
 
 TOKEN = '7784249517:AAGdOGzTyeXHXZj9sE9nuKAzUdCx8u8HPHw'
 ADMIN_ID = 530258581
-CHANNEL_ID = '@ondreeff'  # Замените на ваш канал
+CHANNEL_ID = '@ondreeff'  # Замените на ваш канал, например '@mychannel'
 
 bot = telebot.TeleBot(TOKEN)
-
-# Отключаем вебхук при старте (на всякий случай)
-bot.remove_webhook()
 
 # --- Функции для работы с данными ---
 def load_data():
@@ -63,7 +61,54 @@ def start(message):
     )
     bot.reply_to(message, "Выберите действие:", reply_markup=markup)
 
-# ... (остальные обработчики остаются без изменений)
+@bot.message_handler(func=lambda m: True)
+def handle_text(message):
+    if not is_admin(message.from_user.id):
+        bot.reply_to(message, "❌ У вас нет прав доступа")
+        return
+    text = message.text
+    if text == '➕ Добавить новость':
+        msg = bot.reply_to(message, "Отправьте текст новости:")
+        bot.register_next_step_handler(msg, add_news)
+    elif text == '📋 Список новостей':
+        list_news(message)
+    elif text == '❌ Удалить новость':
+        bot.reply_to(message, "Введите команду /delete_news <номер>")
+    else:
+        bot.reply_to(message, "Неизвестная команда. Используйте кнопки меню.")
+
+def add_news(message):
+    data = load_data()
+    data['news'].append({'text': message.text, 'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
+    save_data(data)
+    bot.reply_to(message, "✅ Новость добавлена")
+
+def list_news(message):
+    data = load_data()
+    if not data['news']:
+        bot.reply_to(message, "Нет новостей")
+        return
+    msg = "Новости:\n"
+    for i, item in enumerate(data['news'], 1):
+        msg += f"{i}. {item['text']} (добавлено {item['timestamp']})\n"
+    bot.reply_to(message, msg)
+
+@bot.message_handler(commands=['delete_news'])
+def delete_news(message):
+    if not is_admin(message.from_user.id):
+        return
+    parts = message.text.split()
+    if len(parts) != 2 or not parts[1].isdigit():
+        bot.reply_to(message, "Используйте: /delete_news <номер>")
+        return
+    idx = int(parts[1]) - 1
+    data = load_data()
+    if 0 <= idx < len(data['news']):
+        removed = data['news'].pop(idx)
+        save_data(data)
+        bot.reply_to(message, f"Удалена новость: {removed['text']}")
+    else:
+        bot.reply_to(message, "Неверный номер")
 
 # --- Вебхук обработчик ---
 @app.route('/webhook', methods=['POST'])
@@ -96,8 +141,11 @@ def publish_news():
     except Exception as e:
         return f"Ошибка при публикации: {e}"
 
+@app.route('/')
+def home():
+    return "Бот работает. Используйте /webhook для Telegram API"
+
 if __name__ == '__main__':
-    # Устанавливаем вебхук при запуске
     bot.remove_webhook()
-    bot.set_webhook(url='https://my-telegram-bot-vogy.onrender.com/webhook')
-    app.run(host='0.0.0.0', port=5000)
+    bot.set_webhook(url='https://my-telegram-bot-vogy.onrender.com/webhook')  # Замените на ваш URL Render
+    serve(app, host='0.0.0.0', port=5000)
