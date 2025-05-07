@@ -7,8 +7,9 @@ from telebot import types
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_FILE = os.path.join(BASE_DIR, 'messages.json')
 
-TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
-ADMIN_ID = int(os.environ.get('ADMIN_ID'))
+# Ваш токен и ID администратора
+TOKEN = '7784249517:AAGdOGzTyeXHXZj9sE9nuKAzUdCx8u8HPHw'  # <-- ваш токен
+ADMIN_ID = 530258581  # <-- ваш Telegram user ID
 
 bot = telebot.TeleBot(TOKEN)
 
