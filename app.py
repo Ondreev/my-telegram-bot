@@ -8,7 +8,7 @@ from waitress import serve
 
 app = Flask(__name__)
 
-YANDEX_TOKEN = "8b118b42c4a84a12b73693e706ed53fe"
+YANDEX_TOKEN = "y0__xDPlq0MGIHMNyDLkNaGExUX-duNkfHnp7Su_aqI8MBTi2xZ"
 DATA_FILE = "bot_data.json"
 
 TOKEN = '7784249517:AAFZdcmFknfTmAf17N2wTifmCoF54BQkeZU'
