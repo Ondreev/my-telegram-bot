@@ -8,14 +8,12 @@ from waitress import serve
 
 app = Flask(__name__)
 
-# Ваш OAuth-токен Яндекс.Диска
 YANDEX_TOKEN = "8b118b42c4a84a12b73693e706ed53fe"
-DATA_FILE = "bot_data.json"  # Имя файла на Яндекс.Диске для хранения данных
+DATA_FILE = "bot_data.json"
 
-# Ваш Telegram токен и настройки
 TOKEN = '7784249517:AAFZdcmFknfTmAf17N2wTifmCoF54BQkeZU'
 ADMIN_ID = 530258581
-CHANNEL_ID = '@ondreeff'  # Замените на ваш канал, например '@mychannel'
+CHANNEL_ID = '@ondreeff'  # Замените на ваш канал
 
 bot = telebot.TeleBot(TOKEN)
 
@@ -26,10 +24,20 @@ def save_to_yadisk(data):
         "path": f"/{DATA_FILE}",
         "overwrite": "true"
     }
-    response = requests.get(url, headers=headers, params=params)
-    upload_url = response.json().get("href")
-    response = requests.put(upload_url, data=json.dumps(data))
-    return response.status_code == 201
+    try:
+        response = requests.get(url, headers=headers, params=params)
+        response.raise_for_status()
+        upload_url = response.json().get("href")
+        if not upload_url:
+            print("Ошибка: не получили upload_url")
+            return False
+        put_response = requests.put(upload_url, data=json.dumps(data))
+        put_response.raise_for_status()
+        print(f"Данные успешно сохранены на Яндекс.Диск, статус {put_response.status_code}")
+        return True
+    except Exception as e:
+        print(f"Ошибка при сохранении на Яндекс.Диск: {e}")
+        return False
 
 def load_from_yadisk():
     headers = {"Authorization": f"OAuth {YANDEX_TOKEN}"}
@@ -37,34 +45,56 @@ def load_from_yadisk():
     params = {"path": f"/{DATA_FILE}"}
     try:
         response = requests.get(url, headers=headers, params=params)
+        response.raise_for_status()
         download_url = response.json().get("href")
-        data = requests.get(download_url).json()
+        if not download_url:
+            print("Ошибка: не получили download_url")
+            return {"news": [], "last_news_id": 0}
+        data_response = requests.get(download_url)
+        data_response.raise_for_status()
+        data = data_response.json()
+        print(f"Данные успешно загружены с Яндекс.Диска, новостей: {len(data.get('news', []))}")
         return data
-    except:
+    except Exception as e:
+        print(f"Ошибка при загрузке с Яндекс.Диска: {e}")
         return {"news": [], "last_news_id": 0}
 
 def add_news(news_type, content, caption=None):
     data = load_from_yadisk()
+    if "news" not in data:
+        data["news"] = []
     data["news"].append({
         "type": news_type,
         "content": content,
         "caption": caption,
         "timestamp": datetime.now().isoformat()
     })
-    save_to_yadisk(data)
+    success = save_to_yadisk(data)
+    if not success:
+        print("Ошибка: не удалось сохранить новость")
+    else:
+        print("Новость добавлена и сохранена")
 
 def get_all_news():
-    return load_from_yadisk().get("news", [])
+    data = load_from_yadisk()
+    return data.get("news", [])
 
 def delete_news_by_id(news_id):
     data = load_from_yadisk()
     news_list = data.get("news", [])
-    filtered_news = [n for idx, n in enumerate(news_list, 1) if idx != news_id]
-    data["news"] = filtered_news
-    save_to_yadisk(data)
+    if 1 <= news_id <= len(news_list):
+        removed = news_list.pop(news_id - 1)
+        data["news"] = news_list
+        save_to_yadisk(data)
+        print(f"Новость #{news_id} удалена: {removed}")
+        return True
+    else:
+        print(f"Ошибка удаления: новость #{news_id} не найдена")
+        return False
 
 def get_publish_state():
-    return load_from_yadisk().get("last_news_id", 0)
+    data = load_from_yadisk()
+    return data.get("last_news_id", 0)
 
 def update_publish_state(news_id):
     data = load_from_yadisk()
@@ -154,8 +184,10 @@ def handle_delete_news(message):
 
     try:
         news_id = int(message.text.split()[1])
-        delete_news_by_id(news_id)
-        bot.reply_to(message, f"✅ Новость #{news_id} удалена")
+        if delete_news_by_id(news_id):
+            bot.reply_to(message, f"✅ Новость #{news_id} удалена")
+        else:
+            bot.reply_to(message, "Ошибка: новость с таким номером не найдена")
     except (IndexError, ValueError):
         bot.reply_to(message, "Используйте: /delete_news <номер>")
 
@@ -195,6 +227,7 @@ def publish_news():
         update_publish_state(next_id)
         return f"✅ Опубликована новость #{next_id}"
     except Exception as e:
+        print(f"Ошибка публикации: {e}")
         return f"Ошибка публикации: {str(e)}"
 
 @app.route('/')
