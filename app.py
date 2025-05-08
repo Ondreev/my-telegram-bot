@@ -5,12 +5,15 @@ from flask import Flask, request
 import telebot
 from telebot import types
 from waitress import serve
+import threading
 
 app = Flask(__name__)
 
+# Вставьте сюда ваш OAuth-токен Яндекс.Диска
 YANDEX_TOKEN = "y0__xDPlq0MGIHMNyDLkNaGExUX-duNkfHnp7Su_aqI8MBTi2xZ"
 DATA_FILE = "bot_data.json"
 
+# Ваш Telegram токен и настройки
 TOKEN = '7784249517:AAFZdcmFknfTmAf17N2wTifmCoF54BQkeZU'
 ADMIN_ID = 530258581
 CHANNEL_ID = '@ondreeff'  # Замените на ваш канал
@@ -20,23 +23,20 @@ bot = telebot.TeleBot(TOKEN)
 def save_to_yadisk(data):
     headers = {"Authorization": f"OAuth {YANDEX_TOKEN}"}
     url = "https://cloud-api.yandex.net/v1/disk/resources/upload"
-    params = {
-        "path": f"/{DATA_FILE}",
-        "overwrite": "true"
-    }
+    params = {"path": f"/{DATA_FILE}", "overwrite": "true"}
     try:
         response = requests.get(url, headers=headers, params=params)
         response.raise_for_status()
         upload_url = response.json().get("href")
         if not upload_url:
-            print("Ошибка: не получили upload_url")
+            print("Не получили upload_url")
             return False
         put_response = requests.put(upload_url, data=json.dumps(data))
         put_response.raise_for_status()
-        print(f"Данные успешно сохранены на Яндекс.Диск, статус {put_response.status_code}")
+        print("Данные успешно сохранены на Яндекс.Диск")
         return True
     except Exception as e:
-        print(f"Ошибка при сохранении на Яндекс.Диск: {e}")
+        print(f"Ошибка при сохранении: {e}")
         return False
 
 def load_from_yadisk():
@@ -48,15 +48,15 @@ def load_from_yadisk():
         response.raise_for_status()
         download_url = response.json().get("href")
         if not download_url:
-            print("Ошибка: не получили download_url")
+            print("Не получили download_url")
             return {"news": [], "last_news_id": 0}
         data_response = requests.get(download_url)
         data_response.raise_for_status()
         data = data_response.json()
-        print(f"Данные успешно загружены с Яндекс.Диска, новостей: {len(data.get('news', []))}")
+        print(f"Данные загружены, новостей: {len(data.get('news', []))}")
         return data
     except Exception as e:
-        print(f"Ошибка при загрузке с Яндекс.Диска: {e}")
+        print(f"Ошибка при загрузке: {e}")
         return {"news": [], "last_news_id": 0}
 
 def add_news(news_type, content, caption=None):
@@ -195,7 +195,7 @@ def handle_delete_news(message):
 def webhook():
     if request.headers.get('content-type') == 'application/json':
         update = telebot.types.Update.de_json(request.get_json())
-        bot.process_new_updates([update])
+        threading.Thread(target=bot.process_new_updates, args=([update],)).start()
         return '', 200
     return 'Invalid request', 400
 
