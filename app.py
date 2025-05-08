@@ -15,7 +15,7 @@ DATA_FILE = "bot_data.json"  # Имя файла на Яндекс.Диске д
 # Ваш Telegram токен и настройки
 TOKEN = '7784249517:AAFZdcmFknfTmAf17N2wTifmCoF54BQkeZU'
 ADMIN_ID = 530258581
-CHANNEL_ID = '@your_channel_username'  # Замените на ваш канал, например '@mychannel'
+CHANNEL_ID = '@ondreeff'  # Замените на ваш канал, например '@mychannel'
 
 bot = telebot.TeleBot(TOKEN)
 
@@ -203,5 +203,5 @@ def home():
 
 if __name__ == '__main__':
     bot.remove_webhook()
-    bot.set_webhook(url='https://your-render-service-url/webhook')  # Замените на ваш URL Render
+    bot.set_webhook(url='https://my-telegram-bot-vogy.onrender.com/webhook')  # Замените на ваш URL Render
     serve(app, host='0.0.0.0', port=5000)
