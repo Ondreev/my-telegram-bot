@@ -1,93 +1,82 @@
-import os
-import telebot
-import sqlite3
+import requests
+import json
 from datetime import datetime
 from flask import Flask, request
+import telebot
 from telebot import types
 from waitress import serve
 
 app = Flask(__name__)
 
-# Настройки базы данных (файл news.db в текущей директории)
-DATABASE = "news.db"
+# Ваш OAuth-токен Яндекс.Диска
+YANDEX_TOKEN = "8b118b42c4a84a12b73693e706ed53fe"
+DATA_FILE = "bot_data.json"  # Имя файла на Яндекс.Диске для хранения данных
+
+# Ваш Telegram токен и настройки
 TOKEN = '7784249517:AAFZdcmFknfTmAf17N2wTifmCoF54BQkeZU'
 ADMIN_ID = 530258581
-CHANNEL_ID = '@ondreeff'  # Замените на ваш канал
+CHANNEL_ID = '@your_channel_username'  # Замените на ваш канал, например '@mychannel'
 
 bot = telebot.TeleBot(TOKEN)
 
-# --- Инициализация базы данных ---
-def init_db():
-    conn = sqlite3.connect(DATABASE)
-    cursor = conn.cursor()
-    # Таблица для новостей
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS news (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            type TEXT NOT NULL,  -- 'text', 'photo', 'video'
-            content TEXT,        -- Текст или file_id для медиа
-            caption TEXT,        -- Описание для медиа
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    # Таблица для отслеживания состояния публикации
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS publish_state (
-            last_news_id INTEGER DEFAULT 0
-        )
-    ''')
-    # Убедимся, что таблица publish_state имеет начальное значение
-    cursor.execute('INSERT OR IGNORE INTO publish_state (last_news_id) VALUES (0)')
-    conn.commit()
-    conn.close()
+def save_to_yadisk(data):
+    headers = {"Authorization": f"OAuth {YANDEX_TOKEN}"}
+    url = "https://cloud-api.yandex.net/v1/disk/resources/upload"
+    params = {
+        "path": f"/{DATA_FILE}",
+        "overwrite": "true"
+    }
+    response = requests.get(url, headers=headers, params=params)
+    upload_url = response.json().get("href")
+    response = requests.put(upload_url, data=json.dumps(data))
+    return response.status_code == 201
 
-init_db()  # Создаём таблицы при старте
+def load_from_yadisk():
+    headers = {"Authorization": f"OAuth {YANDEX_TOKEN}"}
+    url = "https://cloud-api.yandex.net/v1/disk/resources/download"
+    params = {"path": f"/{DATA_FILE}"}
+    try:
+        response = requests.get(url, headers=headers, params=params)
+        download_url = response.json().get("href")
+        data = requests.get(download_url).json()
+        return data
+    except:
+        return {"news": [], "last_news_id": 0}
 
-# --- Функции для работы с базой ---
 def add_news(news_type, content, caption=None):
-    conn = sqlite3.connect(DATABASE)
-    cursor = conn.cursor()
-    cursor.execute(
-        'INSERT INTO news (type, content, caption) VALUES (?, ?, ?)',
-        (news_type, content, caption)
-    )
-    conn.commit()
-    conn.close()
+    data = load_from_yadisk()
+    data["news"].append({
+        "type": news_type,
+        "content": content,
+        "caption": caption,
+        "timestamp": datetime.now().isoformat()
+    })
+    save_to_yadisk(data)
 
 def get_all_news():
-    conn = sqlite3.connect(DATABASE)
-    cursor = conn.cursor()
-    cursor.execute('SELECT * FROM news ORDER BY timestamp DESC')
-    news = cursor.fetchall()
-    conn.close()
-    return news
+    return load_from_yadisk().get("news", [])
 
-def delete_news(news_id):
-    conn = sqlite3.connect(DATABASE)
-    cursor = conn.cursor()
-    cursor.execute('DELETE FROM news WHERE id = ?', (news_id,))
-    conn.commit()
-    conn.close()
+def delete_news_by_id(news_id):
+    data = load_from_yadisk()
+    news_list = data.get("news", [])
+    filtered_news = [n for idx, n in enumerate(news_list, 1) if idx != news_id]
+    data["news"] = filtered_news
+    save_to_yadisk(data)
 
 def get_publish_state():
-    conn = sqlite3.connect(DATABASE)
-    cursor = conn.cursor()
-    cursor.execute('SELECT last_news_id FROM publish_state LIMIT 1')
-    state = cursor.fetchone()[0]
-    conn.close()
-    return state
+    return load_from_yadisk().get("last_news_id", 0)
 
 def update_publish_state(news_id):
-    conn = sqlite3.connect(DATABASE)
-    cursor = conn.cursor()
-    cursor.execute('UPDATE publish_state SET last_news_id = ?', (news_id,))
-    conn.commit()
-    conn.close()
+    data = load_from_yadisk()
+    data["last_news_id"] = news_id
+    save_to_yadisk(data)
 
-# --- Обработчики команд бота ---
+def is_admin(user_id):
+    return user_id == ADMIN_ID
+
 @bot.message_handler(commands=['start'])
 def start(message):
-    if message.from_user.id != ADMIN_ID:
+    if not is_admin(message.from_user.id):
         bot.reply_to(message, "❌ У вас нет прав доступа")
         return
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
@@ -100,7 +89,7 @@ def start(message):
 
 @bot.message_handler(func=lambda m: True)
 def handle_text(message):
-    if message.from_user.id != ADMIN_ID:
+    if not is_admin(message.from_user.id):
         bot.reply_to(message, "❌ У вас нет прав доступа")
         return
     text = message.text
@@ -142,32 +131,34 @@ def show_news_list(message):
         return
 
     response = "📰 Список новостей:\n"
-    for item in news:
-        news_id, news_type, content, caption, timestamp = item
+    for idx, item in enumerate(news, 1):
+        news_type = item.get("type")
+        content = item.get("content")
+        caption = item.get("caption")
+        timestamp = item.get("timestamp", "")
         if news_type == 'photo':
             desc = caption if caption else "Без описания"
-            response += f"{news_id}. 📷 Фото: {desc} ({timestamp})\n"
+            response += f"{idx}. 📷 Фото: {desc} ({timestamp})\n"
         elif news_type == 'video':
             desc = caption if caption else "Без описания"
-            response += f"{news_id}. 🎥 Видео: {desc} ({timestamp})\n"
+            response += f"{idx}. 🎥 Видео: {desc} ({timestamp})\n"
         else:
-            response += f"{news_id}. 📝 {content} ({timestamp})\n"
+            response += f"{idx}. 📝 {content} ({timestamp})\n"
 
     bot.reply_to(message, response)
 
 @bot.message_handler(commands=['delete_news'])
 def handle_delete_news(message):
-    if message.from_user.id != ADMIN_ID:
+    if not is_admin(message.from_user.id):
         return
 
     try:
         news_id = int(message.text.split()[1])
-        delete_news(news_id)
+        delete_news_by_id(news_id)
         bot.reply_to(message, f"✅ Новость #{news_id} удалена")
     except (IndexError, ValueError):
         bot.reply_to(message, "Используйте: /delete_news <номер>")
 
-# --- Вебхук и публикация ---
 @app.route('/webhook', methods=['POST'])
 def webhook():
     if request.headers.get('content-type') == 'application/json':
@@ -183,19 +174,15 @@ def publish_news():
         return "Нет новостей для публикации"
 
     last_id = get_publish_state()
-    next_id = (last_id % len(news)) + 1  # Циклическая ротация
+    next_id = (last_id % len(news)) + 1
 
-    # Находим новость по следующему ID
-    target_news = None
-    for item in news:
-        if item[0] == next_id:
-            target_news = item
-            break
-
-    if not target_news:
+    if next_id > len(news):
         return "Ошибка: новость не найдена"
 
-    news_type, content, caption = target_news[1], target_news[2], target_news[3]
+    item = news[next_id - 1]
+    news_type = item.get("type")
+    content = item.get("content")
+    caption = item.get("caption")
 
     try:
         if news_type == 'photo':
@@ -216,5 +203,5 @@ def home():
 
 if __name__ == '__main__':
     bot.remove_webhook()
-    bot.set_webhook(url='https://my-telegram-bot-vogy.onrender.com/webhook')  # Замените на ваш URL Render
+    bot.set_webhook(url='https://your-render-service-url/webhook')  # Замените на ваш URL Render
     serve(app, host='0.0.0.0', port=5000)
