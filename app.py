@@ -10,7 +10,7 @@ import threading
 app = Flask(__name__)
 
 # Вставьте сюда ваш OAuth-токен Яндекс.Диска
-YANDEX_TOKEN = "y0__xDPlq0MGIHMNyDLkNaGExUX-duNkfHnp7Su_aqI8MBTi2xZ"
+YANDEX_TOKEN = "y0__xDPlq0MGOvNNyCmidiHEwSCRFd3yNjmWuWOnADjLKvDPt5B"
 DATA_FILE = "bot_data.json"
 
 # Ваш Telegram токен и настройки
