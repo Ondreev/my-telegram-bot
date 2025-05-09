@@ -6,58 +6,102 @@ import telebot
 from telebot import types
 from waitress import serve
 import threading
+import logging
+import functools
+import time
+from requests.exceptions import RequestException
+
+# Настройка логирования
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-# Вставьте сюда ваш OAuth-токен Яндекс.Диска
+# Константы
 YANDEX_TOKEN = "y0__xDPlq0MGOvNNyCmidiHEwSCRFd3yNjmWuWOnADjLKvDPt5B"
 DATA_FILE = "bot_data.json"
-
-# Ваш Telegram токен и настройки
 TOKEN = '7784249517:AAFZdcmFknfTmAf17N2wTifmCoF54BQkeZU'
 ADMIN_ID = 530258581
 CHANNEL_ID = '@ondreeff'  # Замените на ваш канал
+TIMEOUT = 30  # секунд
 
 bot = telebot.TeleBot(TOKEN)
+
+# Кэш для данных
+data_cache = {
+    'data': None,
+    'timestamp': 0,
+    'lock': threading.Lock()
+}
 
 def save_to_yadisk(data):
     headers = {"Authorization": f"OAuth {YANDEX_TOKEN}"}
     url = "https://cloud-api.yandex.net/v1/disk/resources/upload"
     params = {"path": f"/{DATA_FILE}", "overwrite": "true"}
     try:
-        response = requests.get(url, headers=headers, params=params)
+        logger.info("Начало сохранения данных на Яндекс.Диск")
+        response = requests.get(url, headers=headers, params=params, timeout=TIMEOUT)
         response.raise_for_status()
         upload_url = response.json().get("href")
         if not upload_url:
-            print("Не получили upload_url")
+            logger.error("Не получен URL для загрузки")
             return False
-        put_response = requests.put(upload_url, data=json.dumps(data))
+
+        put_response = requests.put(upload_url, data=json.dumps(data), timeout=TIMEOUT)
         put_response.raise_for_status()
-        print("Данные успешно сохранены на Яндекс.Диск")
+        logger.info("Данные успешно сохранены на Яндекс.Диск")
         return True
+    except RequestException as e:
+        logger.error(f"Ошибка сети при сохранении: {e}")
+        return False
     except Exception as e:
-        print(f"Ошибка при сохранении: {e}")
+        logger.error(f"Неожиданная ошибка при сохранении: {e}")
         return False
 
 def load_from_yadisk():
-    headers = {"Authorization": f"OAuth {YANDEX_TOKEN}"}
-    url = "https://cloud-api.yandex.net/v1/disk/resources/download"
-    params = {"path": f"/{DATA_FILE}"}
-    try:
-        response = requests.get(url, headers=headers, params=params)
-        response.raise_for_status()
-        download_url = response.json().get("href")
-        if not download_url:
-            print("Не получили download_url")
+    with data_cache['lock']:
+        current_time = time.time()
+        if data_cache['data'] and current_time - data_cache['timestamp'] < 300:
+            return data_cache['data']
+
+        headers = {"Authorization": f"OAuth {YANDEX_TOKEN}"}
+        url = "https://cloud-api.yandex.net/v1/disk/resources/download"
+        params = {"path": f"/{DATA_FILE}"}
+        try:
+            logger.info("Загрузка данных с Яндекс.Диска")
+            response = requests.get(url, headers=headers, params=params, timeout=TIMEOUT)
+            response.raise_for_status()
+            download_url = response.json().get("href")
+            if not download_url:
+                logger.error("Не получен URL для скачивания")
+                return {"news": [], "last_news_id": 0}
+
+            data_response = requests.get(download_url, timeout=TIMEOUT)
+            data_response.raise_for_status()
+            data = data_response.json()
+
+            # Обновляем кэш
+            data_cache['data'] = data
+            data_cache['timestamp'] = current_time
+
+            logger.info(f"Данные загружены, новостей: {len(data.get('news', []))}")
+            return data
+        except RequestException as e:
+            logger.error(f"Ошибка сети при загрузке: {e}")
             return {"news": [], "last_news_id": 0}
-        data_response = requests.get(download_url)
-        data_response.raise_for_status()
-        data = data_response.json()
-        print(f"Данные загружены, новостей: {len(data.get('news', []))}")
-        return data
-    except Exception as e:
-        print(f"Ошибка при загрузке: {e}")
-        return {"news": [], "last_news_id": 0}
+        except Exception as e:
+            logger.error(f"Неожиданная ошибка при загрузке: {e}")
+            return {"news": [], "last_news_id": 0}
+
+def async_save_to_yadisk(data):
+    def _save():
+        try:
+            save_to_yadisk(data)
+        except Exception as e:
+            logger.error(f"Ошибка при асинхронном сохранении: {e}")
+
+    thread = threading.Thread(target=_save)
+    thread.start()
 
 def add_news(news_type, content, caption=None):
     data = load_from_yadisk()
@@ -69,11 +113,8 @@ def add_news(news_type, content, caption=None):
         "caption": caption,
         "timestamp": datetime.now().isoformat()
     })
-    success = save_to_yadisk(data)
-    if not success:
-        print("Ошибка: не удалось сохранить новость")
-    else:
-        print("Новость добавлена и сохранена")
+    async_save_to_yadisk(data)
+    logger.info("Новость добавлена")
 
 def get_all_news():
     data = load_from_yadisk()
@@ -85,12 +126,10 @@ def delete_news_by_id(news_id):
     if 1 <= news_id <= len(news_list):
         removed = news_list.pop(news_id - 1)
         data["news"] = news_list
-        save_to_yadisk(data)
-        print(f"Новость #{news_id} удалена: {removed}")
+        async_save_to_yadisk(data)
+        logger.info(f"Новость #{news_id} удалена")
         return True
-    else:
-        print(f"Ошибка удаления: новость #{news_id} не найдена")
-        return False
+    return False
 
 def get_publish_state():
     data = load_from_yadisk()
@@ -99,7 +138,7 @@ def get_publish_state():
 def update_publish_state(news_id):
     data = load_from_yadisk()
     data["last_news_id"] = news_id
-    save_to_yadisk(data)
+    async_save_to_yadisk(data)
 
 def is_admin(user_id):
     return user_id == ADMIN_ID
@@ -138,44 +177,52 @@ def handle_text(message):
         bot.reply_to(message, "Неизвестная команда. Используйте кнопки меню.")
 
 def process_news_input(message):
-    if message.content_type == 'text':
-        add_news('text', message.text)
-        bot.reply_to(message, "✅ Текстовая новость добавлена")
-    elif message.content_type == 'photo':
-        file_id = message.photo[-1].file_id
-        caption = message.caption or ''
-        add_news('photo', file_id, caption)
-        bot.reply_to(message, "✅ Новость с фото добавлена")
-    elif message.content_type == 'video':
-        file_id = message.video.file_id
-        caption = message.caption or ''
-        add_news('video', file_id, caption)
-        bot.reply_to(message, "✅ Новость с видео добавлена")
-    else:
-        bot.reply_to(message, "❌ Неподдерживаемый формат. Отправьте текст, фото или видео.")
+    try:
+        if message.content_type == 'text':
+            add_news('text', message.text)
+            bot.reply_to(message, "✅ Текстовая новость добавлена")
+        elif message.content_type == 'photo':
+            file_id = message.photo[-1].file_id
+            caption = message.caption or ''
+            add_news('photo', file_id, caption)
+            bot.reply_to(message, "✅ Новость с фото добавлена")
+        elif message.content_type == 'video':
+            file_id = message.video.file_id
+            caption = message.caption or ''
+            add_news('video', file_id, caption)
+            bot.reply_to(message, "✅ Новость с видео добавлена")
+        else:
+            bot.reply_to(message, "❌ Неподдерживаемый формат. Отправьте текст, фото или видео.")
+    except Exception as e:
+        logger.error(f"Ошибка при обработке новости: {e}")
+        bot.reply_to(message, "❌ Произошла ошибка при добавлении новости")
 
 def show_news_list(message):
-    news = get_all_news()
-    if not news:
-        bot.reply_to(message, "Нет новостей")
-        return
+    try:
+        news = get_all_news()
+        if not news:
+            bot.reply_to(message, "Нет новостей")
+            return
 
-    response = "📰 Список новостей:\n"
-    for idx, item in enumerate(news, 1):
-        news_type = item.get("type")
-        content = item.get("content")
-        caption = item.get("caption")
-        timestamp = item.get("timestamp", "")
-        if news_type == 'photo':
-            desc = caption if caption else "Без описания"
-            response += f"{idx}. 📷 Фото: {desc} ({timestamp})\n"
-        elif news_type == 'video':
-            desc = caption if caption else "Без описания"
-            response += f"{idx}. 🎥 Видео: {desc} ({timestamp})\n"
-        else:
-            response += f"{idx}. 📝 {content} ({timestamp})\n"
+        response = "📰 Список новостей:\n"
+        for idx, item in enumerate(news, 1):
+            news_type = item.get("type")
+            content = item.get("content")
+            caption = item.get("caption")
+            timestamp = item.get("timestamp", "")
+            if news_type == 'photo':
+                desc = caption if caption else "Без описания"
+                response += f"{idx}. 📷 Фото: {desc} ({timestamp})\n"
+            elif news_type == 'video':
+                desc = caption if caption else "Без описания"
+                response += f"{idx}. 🎥 Видео: {desc} ({timestamp})\n"
+            else:
+                response += f"{idx}. 📝 {content} ({timestamp})\n"
 
-    bot.reply_to(message, response)
+        bot.reply_to(message, response)
+    except Exception as e:
+        logger.error(f"Ошибка при показе списка новостей: {e}")
+        bot.reply_to(message, "❌ Произошла ошибка при получении списка новостей")
 
 @bot.message_handler(commands=['delete_news'])
 def handle_delete_news(message):
@@ -190,6 +237,9 @@ def handle_delete_news(message):
             bot.reply_to(message, "Ошибка: новость с таким номером не найдена")
     except (IndexError, ValueError):
         bot.reply_to(message, "Используйте: /delete_news <номер>")
+    except Exception as e:
+        logger.error(f"Ошибка при удалении новости: {e}")
+        bot.reply_to(message, "❌ Произошла ошибка при удалении новости")
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -201,22 +251,22 @@ def webhook():
 
 @app.route('/publish_news')
 def publish_news():
-    news = get_all_news()
-    if not news:
-        return "Нет новостей для публикации"
-
-    last_id = get_publish_state()
-    next_id = (last_id % len(news)) + 1
-
-    if next_id > len(news):
-        return "Ошибка: новость не найдена"
-
-    item = news[next_id - 1]
-    news_type = item.get("type")
-    content = item.get("content")
-    caption = item.get("caption")
-
     try:
+        news = get_all_news()
+        if not news:
+            return "Нет новостей для публикации"
+
+        last_id = get_publish_state()
+        next_id = (last_id % len(news)) + 1
+
+        if next_id > len(news):
+            return "Ошибка: новость не найдена"
+
+        item = news[next_id - 1]
+        news_type = item.get("type")
+        content = item.get("content")
+        caption = item.get("caption")
+
         if news_type == 'photo':
             bot.send_photo(CHANNEL_ID, content, caption=caption)
         elif news_type == 'video':
@@ -227,7 +277,7 @@ def publish_news():
         update_publish_state(next_id)
         return f"✅ Опубликована новость #{next_id}"
     except Exception as e:
-        print(f"Ошибка публикации: {e}")
+        logger.error(f"Ошибка при публикации новости: {e}")
         return f"Ошибка публикации: {str(e)}"
 
 @app.route('/')
@@ -236,5 +286,5 @@ def home():
 
 if __name__ == '__main__':
     bot.remove_webhook()
-    bot.set_webhook(url='https://my-telegram-bot-vogy.onrender.com/webhook')  # Замените на ваш URL Render
-    serve(app, host='0.0.0.0', port=5000)
+    bot.set_webhook(url='https://my-telegram-bot-vogy.onrender.com/webhook')
+    serve(app, host='0.0.0.0', port=5000, threads=4)
