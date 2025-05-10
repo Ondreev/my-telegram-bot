@@ -153,7 +153,7 @@ def handle_text(message):
     elif text == '📋 Список новостей':
         show_news_list(message)
     elif text == '❌ Удалить новость':
-        bot.reply_to(message, "Введите команду /delete_news <номер>")
+        bot.reply_to(message, "Используйте кнопки 'Удалить' рядом с нужной новостью.")
     else:
         bot.reply_to(message, "Неизвестная команда. Используйте кнопки меню.")
 
@@ -178,6 +178,8 @@ def process_news_input(message):
         logger.error(f"Ошибка при обработке новости: {e}")
         bot.reply_to(message, "❌ Произошла ошибка при добавлении новости")
 
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+
 def show_news_list(message):
     try:
         news = get_all_news()
@@ -185,50 +187,47 @@ def show_news_list(message):
             bot.reply_to(message, "Нет новостей")
             return
 
-        response = "📰 Список новостей:\n"
         for idx, item in enumerate(news, 1):
             news_type = item.get("type")
-            content = item.get("content")
-            caption = item.get("caption")
+            caption = item.get("caption", "")
             timestamp = item.get("timestamp", "")
             if news_type == 'photo':
                 desc = caption if caption else "Без описания"
-                response += f"{idx}. 📷 Фото: {desc} ({timestamp})\n"
+                text = f"{idx}. 📷 Фото: {desc} ({timestamp})"
             elif news_type == 'video':
                 desc = caption if caption else "Без описания"
-                response += f"{idx}. 🎥 Видео: {desc} ({timestamp})\n"
+                text = f"{idx}. 🎥 Видео: {desc} ({timestamp})"
             else:
-                response += f"{idx}. 📝 {content} ({timestamp})\n"
+                text = f"{idx}. 📝 {item.get('content')} ({timestamp})"
 
-        # Разбиваем длинный текст на части по 4000 символов
-        for i in range(0, len(response), 4000):
-            bot.reply_to(message, response[i:i+4000])
+            markup = InlineKeyboardMarkup()
+            markup.add(InlineKeyboardButton(f"❌ Удалить новость #{idx}", callback_data=f"delete_news_{idx}"))
+            bot.send_message(message.chat.id, text, reply_markup=markup)
 
     except Exception as e:
         logger.error(f"Ошибка при показе списка новостей: {e}")
         bot.reply_to(message, "❌ Произошла ошибка при получении списка новостей")
 
-@bot.message_handler(commands=['delete_news'])
-def handle_delete_news(message):
-    if not is_admin(message.from_user.id):
+@bot.callback_query_handler(func=lambda call: call.data.startswith("delete_news_"))
+def callback_delete_news(call):
+    if not is_admin(call.from_user.id):
+        bot.answer_callback_query(call.id, "Нет прав")
         return
 
     try:
-        news_id = int(message.text.split()[1])
+        news_id = int(call.data.split("_")[-1])
         data = load_from_yadisk()
         news_list = data.get("news", [])
         if 1 <= news_id <= len(news_list):
             removed = news_list.pop(news_id - 1)
             data["news"] = news_list
             async_save_to_yadisk(data)
-            bot.reply_to(message, f"✅ Новость #{news_id} удалена")
+            bot.edit_message_text("✅ Новость удалена", call.message.chat.id, call.message.message_id)
         else:
-            bot.reply_to(message, "Ошибка: новость с таким номером не найдена")
-    except (IndexError, ValueError):
-        bot.reply_to(message, "Используйте: /delete_news <номер>")
+            bot.answer_callback_query(call.id, "Ошибка: новость не найдена")
     except Exception as e:
         logger.error(f"Ошибка при удалении новости: {e}")
-        bot.reply_to(message, "❌ Произошла ошибка при удалении новости")
+        bot.answer_callback_query(call.id, "Ошибка при удалении")
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
