@@ -1,18 +1,20 @@
 import requests
 import json
 from datetime import datetime
-from flask import Flask, request
+from flask import Flask, request, jsonify
 import telebot
 from telebot import types
 from waitress import serve
 import threading
 import logging
-import functools
 import time
-from requests.exceptions import RequestException
+from requests.exceptions import RequestException, Timeout
 
 # Настройка логирования
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
@@ -22,7 +24,7 @@ YANDEX_TOKEN = "y0__xDPlq0MGOvNNyCmidiHEwSCRFd3yNjmWuWOnADjLKvDPt5B"
 DATA_FILE = "bot_data.json"
 TOKEN = '7784249517:AAFZdcmFknfTmAf17N2wTifmCoF54BQkeZU'
 ADMIN_ID = 530258581
-CHANNEL_ID = '@ondreeff'  # Замените на ваш канал
+CHANNEL_ID = '@ondreeff'
 TIMEOUT = 30  # секунд
 
 bot = telebot.TeleBot(TOKEN)
@@ -32,6 +34,11 @@ data_cache = {
     'data': None,
     'timestamp': 0,
     'lock': threading.Lock()
+}
+
+# Состояние сервера
+server_state = {
+    'is_publishing': False
 }
 
 def save_to_yadisk(data):
@@ -51,11 +58,8 @@ def save_to_yadisk(data):
         put_response.raise_for_status()
         logger.info("Данные успешно сохранены на Яндекс.Диск")
         return True
-    except RequestException as e:
-        logger.error(f"Ошибка сети при сохранении: {e}")
-        return False
     except Exception as e:
-        logger.error(f"Неожиданная ошибка при сохранении: {e}")
+        logger.error(f"Ошибка при сохранении: {e}")
         return False
 
 def load_from_yadisk():
@@ -74,7 +78,7 @@ def load_from_yadisk():
             download_url = response.json().get("href")
             if not download_url:
                 logger.error("Не получен URL для скачивания")
-                return {"news": [], "last_news_id": 0}
+                return {"news": []}
 
             data_response = requests.get(download_url, timeout=TIMEOUT)
             data_response.raise_for_status()
@@ -86,12 +90,9 @@ def load_from_yadisk():
 
             logger.info(f"Данные загружены, новостей: {len(data.get('news', []))}")
             return data
-        except RequestException as e:
-            logger.error(f"Ошибка сети при загрузке: {e}")
-            return {"news": [], "last_news_id": 0}
         except Exception as e:
-            logger.error(f"Неожиданная ошибка при загрузке: {e}")
-            return {"news": [], "last_news_id": 0}
+            logger.error(f"Ошибка при загрузке: {e}")
+            return {"news": []}
 
 def async_save_to_yadisk(data):
     def _save():
@@ -119,26 +120,6 @@ def add_news(news_type, content, caption=None):
 def get_all_news():
     data = load_from_yadisk()
     return data.get("news", [])
-
-def delete_news_by_id(news_id):
-    data = load_from_yadisk()
-    news_list = data.get("news", [])
-    if 1 <= news_id <= len(news_list):
-        removed = news_list.pop(news_id - 1)
-        data["news"] = news_list
-        async_save_to_yadisk(data)
-        logger.info(f"Новость #{news_id} удалена")
-        return True
-    return False
-
-def get_publish_state():
-    data = load_from_yadisk()
-    return data.get("last_news_id", 0)
-
-def update_publish_state(news_id):
-    data = load_from_yadisk()
-    data["last_news_id"] = news_id
-    async_save_to_yadisk(data)
 
 def is_admin(user_id):
     return user_id == ADMIN_ID
@@ -219,7 +200,10 @@ def show_news_list(message):
             else:
                 response += f"{idx}. 📝 {content} ({timestamp})\n"
 
-        bot.reply_to(message, response)
+        # Разбиваем длинный текст на части по 4000 символов
+        for i in range(0, len(response), 4000):
+            bot.reply_to(message, response[i:i+4000])
+
     except Exception as e:
         logger.error(f"Ошибка при показе списка новостей: {e}")
         bot.reply_to(message, "❌ Произошла ошибка при получении списка новостей")
@@ -231,7 +215,12 @@ def handle_delete_news(message):
 
     try:
         news_id = int(message.text.split()[1])
-        if delete_news_by_id(news_id):
+        data = load_from_yadisk()
+        news_list = data.get("news", [])
+        if 1 <= news_id <= len(news_list):
+            removed = news_list.pop(news_id - 1)
+            data["news"] = news_list
+            async_save_to_yadisk(data)
             bot.reply_to(message, f"✅ Новость #{news_id} удалена")
         else:
             bot.reply_to(message, "Ошибка: новость с таким номером не найдена")
@@ -251,34 +240,52 @@ def webhook():
 
 @app.route('/publish_news')
 def publish_news():
+    if server_state.get('is_publishing'):
+        return "Публикация уже выполняется, подождите"
+
     try:
+        server_state['is_publishing'] = True
+        logger.info("Начало публикации новости")
+
         news = get_all_news()
         if not news:
+            logger.info("Нет новостей для публикации")
             return "Нет новостей для публикации"
 
-        last_id = get_publish_state()
-        next_id = (last_id % len(news)) + 1
-
-        if next_id > len(news):
-            return "Ошибка: новость не найдена"
-
-        item = news[next_id - 1]
+        # Берём первую новость
+        item = news[0]
         news_type = item.get("type")
         content = item.get("content")
-        caption = item.get("caption")
+        caption = item.get("caption", "")
 
-        if news_type == 'photo':
-            bot.send_photo(CHANNEL_ID, content, caption=caption)
-        elif news_type == 'video':
-            bot.send_video(CHANNEL_ID, content, caption=caption)
-        else:
-            bot.send_message(CHANNEL_ID, content)
+        # Публикуем новость
+        try:
+            if news_type == 'photo':
+                bot.send_photo(CHANNEL_ID, content, caption=caption, timeout=30)
+            elif news_type == 'video':
+                bot.send_video(CHANNEL_ID, content, caption=caption, timeout=30)
+            else:
+                bot.send_message(CHANNEL_ID, content, timeout=30)
 
-        update_publish_state(next_id)
-        return f"✅ Опубликована новость #{next_id}"
+            # Удаляем опубликованную новость из списка
+            news.pop(0)
+            # Сохраняем обновлённый список на Яндекс.Диск
+            data = load_from_yadisk()
+            data["news"] = news
+            async_save_to_yadisk(data)
+
+            logger.info("Новость опубликована и удалена")
+            return "✅ Новость опубликована и удалена"
+
+        except Exception as e:
+            logger.error(f"Ошибка при отправке сообщения: {e}")
+            return f"Ошибка при отправке сообщения: {str(e)}"
+
     except Exception as e:
         logger.error(f"Ошибка при публикации новости: {e}")
         return f"Ошибка публикации: {str(e)}"
+    finally:
+        server_state['is_publishing'] = False
 
 @app.route('/')
 def home():
